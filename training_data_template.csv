@@ -1,2 +1,2 @@
-date,type,duration_minutes,distance_km,kcal,consumption_kcal
-2024-01-01,Laufen,45,10,600,2500 
+date,training_type,duration_minutes,distance_km,kcal,consumption_kcal,intensity,notes
+2025-01-01,crosstrainer,30,5.0,250,2200,3,"Beispielnotiz" 
