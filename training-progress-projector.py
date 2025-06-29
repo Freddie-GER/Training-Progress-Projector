@@ -669,7 +669,7 @@ def interactive_session():
 
     # Correction factor output
     real_weights = load_weight_log()
-    if len(real_weights) >= 2:
+    if len(real_weights) >= 5:
         # Get all daily calories
         all_dates = []
         all_cals = []
@@ -688,6 +688,7 @@ def interactive_session():
         # Optionally, apply this factor to future projections
         projector.correction_factor = factor
     else:
+        print("\nFür eine sinnvolle Kalorien-Korrektur werden mindestens 5 Gewichtseinträge benötigt.")
         projector.correction_factor = 1.0
 
 if __name__ == "__main__":
