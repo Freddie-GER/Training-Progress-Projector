@@ -1,0 +1,11 @@
+# Trainingsdaten und Gewichtsprotokoll (echt)
+training_data.csv
+weight_log.csv
+# Prognose- und Trainingsdaten (automatisch erzeugt)
+training_data.json
+prognosis_history.json
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.tmp 
