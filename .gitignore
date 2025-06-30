@@ -4,6 +4,8 @@ weight_log.csv
 # Prognose- und Trainingsdaten (automatisch erzeugt)
 training_data.json
 prognosis_history.json
+prognosis_last_week.json
+prognosis_two_weeks_ago.json
 *.png
 *.jpg
 *.jpeg

@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Tuple
 import json
+from shutil import copyfile
+import matplotlib.dates as mdates
+from json.decoder import JSONDecodeError
 
 @dataclass
 class TrainingSession:
@@ -34,7 +37,8 @@ def load_weight_log(filename: str = "weight_log.csv") -> List[Tuple[datetime, fl
     with open(filename, 'r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
-            weights.append((datetime.strptime(row['date'], '%Y-%m-%d'), float(row['weight'])))
+            weight_str = row['weight'].replace(',', '.')
+            weights.append((datetime.strptime(row['date'], '%Y-%m-%d'), float(weight_str)))
     return weights
 
 class TrainingProgressProjector:
@@ -93,10 +97,11 @@ class TrainingProgressProjector:
         """Add a new training session"""
         if isinstance(date, str):
             date = datetime.strptime(date, "%Y-%m-%d")
-        
+        # Falls distance_km als String mit Komma übergeben wird
+        if isinstance(distance_km, str):
+            distance_km = float(distance_km.replace(',', '.'))
         # Calculate kcal
         kcal = self.calculate_kcal(training_type, duration_minutes, intensity, distance_km)
-        
         session = TrainingSession(
             date=date,
             training_type=training_type,
@@ -108,10 +113,8 @@ class TrainingProgressProjector:
         )
         self.training_sessions.append(session)
         self.training_sessions.sort(key=lambda x: x.date)
-        
         # Save to CSV
         self.save_training_data()
-        
         print(f"Training session added: {date.strftime('%Y-%m-%d')} - {training_type} ({duration_minutes}min, {kcal}kcal)")
         return session
     
@@ -337,11 +340,30 @@ BEWERTUNG:
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
         # Plot 1: Calorie consumption
         ax1.scatter(real_dates, real_calories, color='orange', s=50, label='Echte Tageswerte', zorder=5)
-        ax1.plot(prognosis_dates, prognosis_calories, color='green', alpha=0.7, label='Prognose')
+        num_prognosen = len(self.prognosis_history)
+        farben = ['#1f77b4', '#87ceeb']  # blau, hellblau
+        for i, idx in enumerate(range(-2, 0)):
+            if num_prognosen + idx >= 0:
+                old_prognosis = self.prognosis_history[idx]
+                real_count_old = len(old_prognosis["real_calories"])
+                old_dates = [date for date, _ in old_prognosis["all_calories"]][real_count_old:]
+                old_calories = [cal for _, cal in old_prognosis["all_calories"]][real_count_old:]
+                # Nur Moving Average der alten Prognose anzeigen
+                if len(old_calories) >= 7:
+                    old_ma = np.convolve(old_calories, np.ones(7)/7, mode='valid')
+                    old_ma_dates = old_dates[6:]
+                    ax1.plot(old_ma_dates, old_ma, color=farben[i], linestyle=':', linewidth=2, label=f'MA Prognose Woche {num_prognosen+idx+1}')
+        # Aktuelle Prognose
+        ax1.plot(prognosis_dates, prognosis_calories, color='green', alpha=0.7, label='Prognose (aktuell)')
+        # Moving Average der aktuellen Prognose
+        if len(prognosis_calories) >= 7:
+            prognosis_ma = np.convolve(prognosis_calories, np.ones(7)/7, mode='valid')
+            prognosis_ma_dates = prognosis_dates[6:]
+            ax1.plot(prognosis_ma_dates, prognosis_ma, color='green', linestyle=':', linewidth=2, label='MA Prognose (aktuell)')
         ma_dates = dates[6:]
         ma_values = latest_prognosis["moving_average"]
-        ax1.plot(ma_dates, ma_values, color='red', linestyle='--', linewidth=2, label='Moving Average (7 Tage)')
-        ax1.set_title('Tagesverbrauch: Reale Werte & Prognose', fontsize=14, fontweight='bold')
+        ax1.plot(ma_dates, ma_values, color='red', linestyle='--', linewidth=2, label='Moving Average (7 Tage, real)')
+        ax1.set_title('Tagesverbrauch: Reale Werte & Prognosen', fontsize=14, fontweight='bold')
         ax1.set_ylabel('Tagesverbrauch (kcal)')
         ax1.legend()
         ax1.grid(True, alpha=0.3)
@@ -394,22 +416,22 @@ BEWERTUNG:
         if not os.path.exists(filename):
             print(f"Training data file {filename} not found. Starting with empty data.")
             return
-        
         self.training_sessions = []
         with open(filename, 'r', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
+                # Distanz ggf. mit Komma
+                distance_str = row['distance_km'].replace(',', '.')
                 session = TrainingSession(
                     date=datetime.strptime(row['date'], '%Y-%m-%d'),
                     training_type=row['training_type'],
                     duration_minutes=int(row['duration_minutes']),
-                    distance_km=float(row['distance_km']),
+                    distance_km=float(distance_str),
                     kcal=int(row['kcal']),
                     intensity=int(row['intensity']),
                     notes=row['notes']
                 )
                 self.training_sessions.append(session)
-        
         self.training_sessions.sort(key=lambda x: x.date)
         print(f"Loaded {len(self.training_sessions)} training sessions from {filename}")
     
@@ -476,6 +498,101 @@ BEWERTUNG:
             self.prognosis_history.append(prognosis)
         
         print(f"Loaded {len(self.prognosis_history)} prognosis records from {filename}")
+
+    def _get_last_sundays(self, today=None):
+        """Returns the last and the second-to-last Sunday as datetime objects."""
+        if today is None:
+            today = datetime.now()
+        # 6 = Sunday
+        days_since_sunday = (today.weekday() - 6) % 7
+        last_sunday = today - timedelta(days=days_since_sunday)
+        last_sunday = last_sunday.replace(hour=0, minute=0, second=0, microsecond=0)
+        prev_sunday = last_sunday - timedelta(days=7)
+        return last_sunday, prev_sunday
+
+    def _filter_sessions_until(self, cutoff_date):
+        """Returns a list of training sessions up to and including the cutoff_date."""
+        return [s for s in self.training_sessions if s.date <= cutoff_date]
+
+    def _filter_weights_until(self, cutoff_date, filename="weight_log.csv"):
+        """Returns a list of weight entries up to and including the cutoff_date."""
+        weights = load_weight_log(filename)
+        return [w for w in weights if w[0] <= cutoff_date]
+
+    def generate_prognosis_for_cutoff(self, cutoff_date, weeks_ahead=25):
+        """Generate a prognosis as of a specific cutoff date, using only data up to that date."""
+        # Temporär gefilterte Trainingsdaten
+        filtered_sessions = self._filter_sessions_until(cutoff_date)
+        if not filtered_sessions:
+            return {"error": "No training data available up to cutoff date"}
+        # Temporär gefilterte Gewichtsdaten
+        filtered_weights = self._filter_weights_until(cutoff_date)
+        # Temporär ersetzen
+        orig_sessions = self.training_sessions
+        self.training_sessions = filtered_sessions
+        # Prognose generieren
+        prognosis = self.generate_prognosis(weeks_ahead=weeks_ahead)
+        # Prognose mit gefilterten echten Gewichten
+        if filtered_weights:
+            prognosis["real_weights"] = [(d.isoformat(), w) for d, w in filtered_weights]
+        # Restore
+        self.training_sessions = orig_sessions
+        return prognosis
+
+    def serialize_prognosis_for_json(self, prognosis):
+        """Convert all datetime objects in a prognosis dict to ISO strings for JSON serialization."""
+        if "error" in prognosis:
+            return prognosis.copy()
+        p = prognosis.copy()
+        p['start_date'] = p['start_date'].isoformat() if isinstance(p['start_date'], datetime) else p['start_date']
+        p['end_date'] = p['end_date'].isoformat() if isinstance(p['end_date'], datetime) else p['end_date']
+        p['generated_date'] = p['generated_date'].isoformat() if isinstance(p['generated_date'], datetime) else p['generated_date']
+        # Convert lists of tuples with datetimes
+        def convert_list(lst):
+            return [(d.isoformat() if isinstance(d, datetime) else d, v) for d, v in lst]
+        p['real_calories'] = convert_list(p['real_calories'])
+        p['prognosis_calories'] = convert_list(p['prognosis_calories'])
+        p['all_calories'] = convert_list(p['all_calories'])
+        p['weight_projection'] = convert_list(p['weight_projection'])
+        # moving_average (numpy array)
+        if 'moving_average' in p:
+            ma = p['moving_average']
+            if hasattr(ma, 'tolist'):
+                p['moving_average'] = ma.tolist()
+            else:
+                p['moving_average'] = [ma] if ma is not None else []
+        # real_weights (optional)
+        if 'real_weights' in p:
+            p['real_weights'] = [(d if isinstance(d, str) else d.isoformat(), w) for d, w in p['real_weights']]
+        return p
+
+    def auto_save_weekly_snapshots(self):
+        """Automatically save prognosis snapshots for last and previous Sunday if needed."""
+        last_sunday, prev_sunday = self._get_last_sundays()
+        last_week_file = "prognosis_last_week.json"
+        two_weeks_ago_file = "prognosis_two_weeks_ago.json"
+        need_update = True
+        if os.path.exists(last_week_file):
+            with open(last_week_file, 'r', encoding='utf-8') as f:
+                try:
+                    data = json.load(f)
+                    file_date = data.get('generated_date')
+                    if file_date and file_date.startswith(last_sunday.strftime('%Y-%m-%d')):
+                        need_update = False
+                except Exception:
+                    pass
+        if need_update:
+            if os.path.exists(last_week_file):
+                copyfile(last_week_file, two_weeks_ago_file)
+            prognosis = self.generate_prognosis_for_cutoff(last_sunday)
+            if 'generated_date' in prognosis:
+                prognosis['generated_date'] = last_sunday.isoformat()
+            else:
+                prognosis['generated_date'] = last_sunday.isoformat()
+            # Serialize all datetimes to strings
+            prognosis_serialized = self.serialize_prognosis_for_json(prognosis)
+            with open(last_week_file, 'w', encoding='utf-8') as f:
+                json.dump(prognosis_serialized, f, indent=2, ensure_ascii=False)
 
 def get_user_input(prompt: str, options: List[str] = None) -> str:
     """Get user input with optional choices"""
@@ -555,6 +672,9 @@ def interactive_session():
         import_choice = get_user_input("\nKeine Trainingsdaten gefunden. Ursprüngliche Daten importieren? (ja/nein): ", ["ja", "nein"])
         if import_choice.lower() == "ja":
             import_original_data(projector)
+    
+    # Automatische Wochenprognose-Snapshots
+    projector.auto_save_weekly_snapshots()
     
     # Get today's date
     today = datetime.now()
@@ -649,17 +769,16 @@ def interactive_session():
         latest = projector.prognosis_history[-1]
         final_weight = latest["weight_projection"][-1][1]
         print(f"\nAktuelle Gewichtsprognose (Endgewicht): {final_weight:.1f} kg")
-        
-        # Show plot
-        print("\nGeneriere Fortschrittsplot...")
-        projector.plot_progress()
+        # Show new weekly comparison plot
+        print("\nGeneriere Wochenvergleichsplot...")
+        plot_weekly_comparison()
     else:
         print("\nKeine Prognosedaten verfügbar. Generiere erste Prognose...")
         initial_prognosis = projector.generate_prognosis()
         if "error" not in initial_prognosis:
             projector.prognosis_history.append(initial_prognosis)
             projector.save_prognosis_history()
-            projector.plot_progress()
+            plot_weekly_comparison()
         else:
             print("Fehler beim Generieren der Prognose:", initial_prognosis["error"])
 
@@ -686,6 +805,63 @@ def interactive_session():
     else:
         print("\nFür eine sinnvolle Kalorien-Korrektur werden mindestens 5 Gewichtseinträge benötigt.")
         projector.correction_factor = 1.0
+
+def plot_weekly_comparison():
+    """Vergleicht die Moving Averages der letzten beiden Wochenprognosen mit dem realen Verlauf."""
+    import json
+    import os
+    import numpy as np
+    from datetime import datetime
+    import matplotlib.pyplot as plt
+
+    # Farben
+    farbe_woche1 = '#1f77b4'  # Blau
+    farbe_woche2 = '#87ceeb'  # Hellblau
+    farbe_real = 'red'
+    farbe_punkte = 'orange'
+
+    # Prognosen laden
+    prognosis_files = [
+        ("prognosis_two_weeks_ago.json", farbe_woche2, 'MA Prognose Woche -2'),
+        ("prognosis_last_week.json", farbe_woche1, 'MA Prognose Woche -1')
+    ]
+    plt.figure(figsize=(16, 6))
+    for file, color, label in prognosis_files:
+        if os.path.exists(file) and os.path.getsize(file) > 0:
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    prognosis = json.load(f)
+                # Moving Average und zugehörige Daten extrahieren
+                ma = prognosis.get('moving_average', [])
+                all_calories = prognosis.get('all_calories', [])
+                if len(ma) > 0 and len(all_calories) >= len(ma):
+                    ma_dates = [datetime.fromisoformat(d) for d, _ in all_calories][6:6+len(ma)]
+                    plt.plot(ma_dates, ma, color=color, linestyle='-', linewidth=2, label=label)
+            except (JSONDecodeError, KeyError, ValueError):
+                # Datei ist ungültig oder leer, einfach überspringen
+                continue
+    # Echte Tageswerte und reales MA
+    projector = TrainingProgressProjector()
+    if len(projector.training_sessions) > 0:
+        start_date = min(s.date for s in projector.training_sessions)
+        end_date = max(s.date for s in projector.training_sessions)
+        days = (end_date - start_date).days + 1
+        real_calories = projector.get_daily_calories(start_date, days)
+        real_dates = [d for d, _ in real_calories]
+        real_values = [v for _, v in real_calories]
+        plt.scatter(real_dates, real_values, color=farbe_punkte, s=60, label='Echte Tageswerte', zorder=5)
+        # Reales Moving Average
+        if len(real_values) >= 7:
+            real_ma = np.convolve(real_values, np.ones(7)/7, mode='valid')
+            real_ma_dates = real_dates[6:6+len(real_ma)]
+            plt.plot(real_ma_dates, real_ma, color=farbe_real, linestyle='--', linewidth=2, label='Moving Average (7 Tage, real)')
+    plt.title('Tagesverbrauch: Reale Werte & Wochenprognosen', fontsize=16, fontweight='bold')
+    plt.ylabel('Tagesverbrauch (kcal)')
+    plt.xlabel('Datum')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == "__main__":
     interactive_session()
