@@ -63,8 +63,8 @@ class TrainingProgressProjector:
         
         # Training type kcal calculations (kcal per minute)
         self.training_calories = {
-            "crosstrainer": 8.5,  # kcal per minute at intensity 3
-            "crosstrainer_intervall": 12.0,  # kcal per minute at intensity 2
+            "crosstrainer": 6.0,  # kcal per minute at intensity 1
+            "crosstrainer_intervall": 7.0,  # kcal per minute at intensity 1
             "spaziergang": 4.0,  # kcal per minute
             "walking_jogging": 6.5,  # kcal per minute
             "radfahren": 7.0  # kcal per minute
@@ -77,22 +77,14 @@ class TrainingProgressProjector:
                       intensity: int = 3, distance_km: float = 0) -> int:
         """Calculate kcal based on training type, duration, and intensity"""
         base_kcal_per_min = self.training_calories.get(training_type, 6.0)
-        
-        # Adjust for intensity
-        intensity_factor = 1.0
-        if training_type == "crosstrainer":
-            intensity_factor = 0.8 + (intensity * 0.2)  # 1.0 for intensity 3
-        elif training_type == "crosstrainer_intervall":
-            intensity_factor = 1.0 + (intensity * 0.3)  # 1.6 for intensity 2
-        
+        # Intensitätsfaktor: 1.0 + 0.2 * (intensity - 1)
+        intensity_factor = 1.0 + (0.2 * (intensity - 1))
         # Calculate base kcal
         kcal = int(base_kcal_per_min * duration_minutes * intensity_factor)
-        
         # Add distance bonus for certain activities
         if training_type in ["spaziergang", "walking_jogging", "radfahren"] and distance_km > 0:
             distance_bonus = int(distance_km * 50)  # 50 kcal per km
             kcal += distance_bonus
-        
         return kcal
     
     def add_training_session(self, date: str, training_type: str, 
@@ -446,7 +438,11 @@ BEWERTUNG:
             
             # Convert numpy array to list
             if 'moving_average' in prognosis:
-                serializable_prognosis['moving_average'] = prognosis['moving_average'].tolist()
+                ma = prognosis['moving_average']
+                if hasattr(ma, 'tolist'):
+                    serializable_prognosis['moving_average'] = ma.tolist()
+                else:
+                    serializable_prognosis['moving_average'] = [ma] if ma is not None else []
             
             serializable_history.append(serializable_prognosis)
         
@@ -592,9 +588,9 @@ def interactive_session():
         training_type = training_types[training_choice]
         
         # Get intensity for crosstrainer
-        intensity = 3  # default
+        intensity = 1  # default
         if training_type in ["crosstrainer", "crosstrainer_intervall"]:
-            intensity_input = get_user_input("Intensitätsstufe (1-5, Standard: 3): ")
+            intensity_input = get_user_input("Intensitätsstufe (1-5, Standard: 1): ")
             if intensity_input:
                 intensity = int(intensity_input)
         
