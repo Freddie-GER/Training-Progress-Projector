@@ -8,4 +8,9 @@
 - `.gitignore` um Prognose-Snapshots erweitert, damit diese nicht ins Repository gelangen.
 
 ### Fixed
-- Keine Abstürze mehr bei fehlenden Prognose-Snapshots oder falschem Dezimaltrennzeichen in CSV-Dateien. 
+- Keine Abstürze mehr bei fehlenden Prognose-Snapshots oder falschem Dezimaltrennzeichen in CSV-Dateien.
+
+## [1.1.1] - 2024-06-30
+### Fixed
+- Kombinierter Plot (Kalorienvergleich oben, Gewichtsprognose unten) funktioniert jetzt immer korrekt und zeigt beide Verläufe zuverlässig an.
+- Plot-Fenstergröße ist jetzt kompakt (ca. 1/4 Bildschirm, 10x5.5 Zoll). 

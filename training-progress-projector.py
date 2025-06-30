@@ -338,6 +338,7 @@ BEWERTUNG:
         real_weight_values = [w for _, w in real_weights]
         # Create subplots
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
+        fig.set_size_inches(10, 5.5)
         # Plot 1: Calorie consumption
         ax1.scatter(real_dates, real_calories, color='orange', s=50, label='Echte Tageswerte', zorder=5)
         num_prognosen = len(self.prognosis_history)
@@ -769,16 +770,15 @@ def interactive_session():
         latest = projector.prognosis_history[-1]
         final_weight = latest["weight_projection"][-1][1]
         print(f"\nAktuelle Gewichtsprognose (Endgewicht): {final_weight:.1f} kg")
-        # Show new weekly comparison plot
-        print("\nGeneriere Wochenvergleichsplot...")
-        plot_weekly_comparison()
+        print("\nGeneriere kombinierten Fortschrittsplot...")
+        plot_combined_progress(projector)
     else:
         print("\nKeine Prognosedaten verfügbar. Generiere erste Prognose...")
         initial_prognosis = projector.generate_prognosis()
         if "error" not in initial_prognosis:
             projector.prognosis_history.append(initial_prognosis)
             projector.save_prognosis_history()
-            plot_weekly_comparison()
+            plot_combined_progress(projector)
         else:
             print("Fehler beim Generieren der Prognose:", initial_prognosis["error"])
 
@@ -806,13 +806,14 @@ def interactive_session():
         print("\nFür eine sinnvolle Kalorien-Korrektur werden mindestens 5 Gewichtseinträge benötigt.")
         projector.correction_factor = 1.0
 
-def plot_weekly_comparison():
-    """Vergleicht die Moving Averages der letzten beiden Wochenprognosen mit dem realen Verlauf."""
+def plot_combined_progress(projector):
+    """Zeigt oben den neuen Wochenvergleichsplot (Kalorien) und unten den Gewichtsprognose-Plot in einem gemeinsamen Figure."""
     import json
     import os
     import numpy as np
     from datetime import datetime
     import matplotlib.pyplot as plt
+    from json.decoder import JSONDecodeError
 
     # Farben
     farbe_woche1 = '#1f77b4'  # Blau
@@ -825,23 +826,22 @@ def plot_weekly_comparison():
         ("prognosis_two_weeks_ago.json", farbe_woche2, 'MA Prognose Woche -2'),
         ("prognosis_last_week.json", farbe_woche1, 'MA Prognose Woche -1')
     ]
-    plt.figure(figsize=(16, 6))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12), sharex=True)
+    fig.set_size_inches(10, 5.5)
+    # --- OBERER PLOT: Kalorienvergleich ---
     for file, color, label in prognosis_files:
         if os.path.exists(file) and os.path.getsize(file) > 0:
             try:
                 with open(file, 'r', encoding='utf-8') as f:
                     prognosis = json.load(f)
-                # Moving Average und zugehörige Daten extrahieren
                 ma = prognosis.get('moving_average', [])
                 all_calories = prognosis.get('all_calories', [])
                 if len(ma) > 0 and len(all_calories) >= len(ma):
                     ma_dates = [datetime.fromisoformat(d) for d, _ in all_calories][6:6+len(ma)]
-                    plt.plot(ma_dates, ma, color=color, linestyle='-', linewidth=2, label=label)
+                    ax1.plot(ma_dates, ma, color=color, linestyle='-', linewidth=2, label=label)
             except (JSONDecodeError, KeyError, ValueError):
-                # Datei ist ungültig oder leer, einfach überspringen
                 continue
     # Echte Tageswerte und reales MA
-    projector = TrainingProgressProjector()
     if len(projector.training_sessions) > 0:
         start_date = min(s.date for s in projector.training_sessions)
         end_date = max(s.date for s in projector.training_sessions)
@@ -849,17 +849,41 @@ def plot_weekly_comparison():
         real_calories = projector.get_daily_calories(start_date, days)
         real_dates = [d for d, _ in real_calories]
         real_values = [v for _, v in real_calories]
-        plt.scatter(real_dates, real_values, color=farbe_punkte, s=60, label='Echte Tageswerte', zorder=5)
-        # Reales Moving Average
+        ax1.scatter(real_dates, real_values, color=farbe_punkte, s=60, label='Echte Tageswerte', zorder=5)
         if len(real_values) >= 7:
             real_ma = np.convolve(real_values, np.ones(7)/7, mode='valid')
             real_ma_dates = real_dates[6:6+len(real_ma)]
-            plt.plot(real_ma_dates, real_ma, color=farbe_real, linestyle='--', linewidth=2, label='Moving Average (7 Tage, real)')
-    plt.title('Tagesverbrauch: Reale Werte & Wochenprognosen', fontsize=16, fontweight='bold')
-    plt.ylabel('Tagesverbrauch (kcal)')
-    plt.xlabel('Datum')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+            ax1.plot(real_ma_dates, real_ma, color=farbe_real, linestyle='--', linewidth=2, label='Moving Average (7 Tage, real)')
+    ax1.set_title('Tagesverbrauch: Reale Werte & Wochenprognosen', fontsize=14, fontweight='bold')
+    ax1.set_ylabel('Tagesverbrauch (kcal)')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    # --- UNTERER PLOT: Gewichtsprognose ---
+    if projector.prognosis_history:
+        latest_prognosis = projector.prognosis_history[-1]
+        dates = [date for date, _ in latest_prognosis["all_calories"]]
+        weights = [weight for _, weight in latest_prognosis["weight_projection"]]
+        ax2.plot(dates, weights, color='blue', linewidth=2, label='Prognostiziertes Gewicht (Kalorienmodell)')
+        ax2.axhline(y=projector.initial_weight, color='gray', linestyle=':', alpha=0.7, label=f'Startgewicht ({projector.initial_weight} kg)')
+        # Echte Gewichte
+        real_weights = load_weight_log()
+        if real_weights:
+            real_weight_dates = [d for d, _ in real_weights]
+            real_weight_values = [w for _, w in real_weights]
+            ax2.scatter(real_weight_dates, real_weight_values, color='red', s=80, zorder=6, label='Echtes Gewicht')
+            # Regression durch echte Gewichte
+            if len(real_weights) >= 2:
+                x = np.array([(d - real_weight_dates[0]).days for d in dates])
+                x_real = np.array([(d - real_weight_dates[0]).days for d in real_weight_dates])
+                y_real = np.array(real_weight_values)
+                slope, intercept = np.polyfit(x_real, y_real, 1)
+                y_pred = slope * x + intercept
+                ax2.plot(dates, y_pred, color='green', linestyle='--', linewidth=2, label='Prognostiziertes Gewicht (Trend aus echten Werten)')
+        ax2.set_title('Gewichtsverlauf: Prognose', fontsize=14, fontweight='bold')
+        ax2.set_xlabel('Datum')
+        ax2.set_ylabel('Gewicht (kg)')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
 
