@@ -10,6 +10,15 @@
 ### Fixed
 - Keine Abstürze mehr bei fehlenden Prognose-Snapshots oder falschem Dezimaltrennzeichen in CSV-Dateien.
 
+## [1.1.2] - 2025-07-12
+### Fixed
+- **Critical Bug Fix**: Fixed `AttributeError: 'NoneType' object has no attribute 'isoformat'` in prognosis history serialization
+- **Critical Bug Fix**: Fixed `ValueError: x and y must have same first dimension` in plotting functions
+- Added robust null checks in data serialization to prevent crashes with None values
+- Added array length validation in plotting functions to prevent dimension mismatches
+- Enhanced weight projection calculation with safety checks for edge cases
+- Improved error handling in prognosis generation and data processing
+
 ## [1.1.1] - 2024-06-30
 ### Fixed
 - Kombinierter Plot (Kalorienvergleich oben, Gewichtsprognose unten) funktioniert jetzt immer korrekt und zeigt beide Verläufe zuverlässig an.
