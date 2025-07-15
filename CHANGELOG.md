@@ -23,3 +23,7 @@
 ### Fixed
 - Kombinierter Plot (Kalorienvergleich oben, Gewichtsprognose unten) funktioniert jetzt immer korrekt und zeigt beide Verläufe zuverlässig an.
 - Plot-Fenstergröße ist jetzt kompakt (ca. 1/4 Bildschirm, 10x5.5 Zoll). 
+
+## [1.2.0] - 2025-07-15
+### Added
+- Improved calorie calculation for crosstrainer and crosstrainer_intervall: Now takes both duration and distance into account and uses the lower value to avoid overestimation. This makes calorie output more realistic when distance is much lower for the same time/intensity. 

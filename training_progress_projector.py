@@ -101,14 +101,23 @@ class TrainingProgressProjector:
                       intensity: int = 3, distance_km: float = 0) -> int:
         """Calculate kcal based on training type, duration, and intensity"""
         base_kcal_per_min = self.training_calories.get(training_type, 6.0)
-        # Intensitätsfaktor: 1.0 + 0.2 * (intensity - 1)
         intensity_factor = 1.0 + (0.2 * (intensity - 1))
-        # Calculate base kcal
-        kcal = int(base_kcal_per_min * duration_minutes * intensity_factor)
-        # Add distance bonus for certain activities
-        if training_type in ["spaziergang", "walking_jogging", "radfahren"] and distance_km > 0:
-            distance_bonus = int(distance_km * 50)  # 50 kcal per km
-            kcal += distance_bonus
+        # Crosstrainer/Intervall: Use both duration and distance if available
+        if training_type in ["crosstrainer", "crosstrainer_intervall"]:
+            kcal_duration = base_kcal_per_min * duration_minutes * intensity_factor
+            # Use a typical kcal/km value for crosstrainer, scaled by intensity
+            kcal_per_km = 60 * intensity_factor  # e.g., 60 kcal/km at intensity 1
+            kcal_distance = distance_km * kcal_per_km if distance_km > 0 else 0
+            if distance_km > 0:
+                kcal = int(min(kcal_duration, kcal_distance))
+            else:
+                kcal = int(kcal_duration)
+        else:
+            # For other types, keep the existing logic
+            kcal = int(base_kcal_per_min * duration_minutes * intensity_factor)
+            if training_type in ["spaziergang", "walking_jogging", "radfahren"] and distance_km > 0:
+                distance_bonus = int(distance_km * 50)  # 50 kcal per km
+                kcal += distance_bonus
         return kcal
     
     def add_training_session(self, date: str, training_type: str, 
