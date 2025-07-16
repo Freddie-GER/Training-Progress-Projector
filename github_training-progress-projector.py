@@ -23,19 +23,12 @@ class TrainingSession:
     notes: str = ""
 
 def save_weight_log(date: datetime, weight: float, filename: str = "weight_log.csv"):
-    try:
-        # Ensure weight is a valid float
-        weight = float(weight)
-        
-        exists = os.path.exists(filename)
-        with open(filename, 'a', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            if not exists:
-                writer.writerow(["date", "weight"])
-            writer.writerow([date.strftime('%Y-%m-%d'), weight])
-    except (ValueError, IOError) as e:
-        print(f"Error saving weight log: {e}")
-        raise
+    exists = os.path.exists(filename)
+    with open(filename, 'a', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        if not exists:
+            writer.writerow(["date", "weight"])
+        writer.writerow([date.strftime('%Y-%m-%d'), weight])
 
 def load_weight_log(filename: str = "weight_log.csv") -> List[Tuple[datetime, float]]:
     if not os.path.exists(filename):
@@ -44,21 +37,8 @@ def load_weight_log(filename: str = "weight_log.csv") -> List[Tuple[datetime, fl
     with open(filename, 'r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
-            try:
-                # Clean up weight string and handle comma/point conversion
-                weight_str = row['weight'].replace(',', '.')
-                # Remove any extra data that might have been concatenated
-                if ',' in weight_str:
-                    weight_str = weight_str.split(',')[0]
-                weight = float(weight_str)
-                
-                # Parse date
-                date = datetime.strptime(row['date'], '%Y-%m-%d')
-                
-                weights.append((date, weight))
-            except (ValueError, KeyError) as e:
-                print(f"Warning: Skipping corrupted weight entry: {row} - Error: {e}")
-                continue
+            weight_str = row['weight'].replace(',', '.')
+            weights.append((datetime.strptime(row['date'], '%Y-%m-%d'), float(weight_str)))
     return weights
 
 class TrainingProgressProjector:
@@ -101,23 +81,14 @@ class TrainingProgressProjector:
                       intensity: int = 3, distance_km: float = 0) -> int:
         """Calculate kcal based on training type, duration, and intensity"""
         base_kcal_per_min = self.training_calories.get(training_type, 6.0)
+        # Intensitätsfaktor: 1.0 + 0.2 * (intensity - 1)
         intensity_factor = 1.0 + (0.2 * (intensity - 1))
-        # Crosstrainer/Intervall: Use both duration and distance if available
-        if training_type in ["crosstrainer", "crosstrainer_intervall"]:
-            kcal_duration = base_kcal_per_min * duration_minutes * intensity_factor
-            # Use a typical kcal/km value for crosstrainer, scaled by intensity
-            kcal_per_km = 60 * intensity_factor  # e.g., 60 kcal/km at intensity 1
-            kcal_distance = distance_km * kcal_per_km if distance_km > 0 else 0
-            if distance_km > 0:
-                kcal = int(min(kcal_duration, kcal_distance))
-            else:
-                kcal = int(kcal_duration)
-        else:
-            # For other types, keep the existing logic
-            kcal = int(base_kcal_per_min * duration_minutes * intensity_factor)
-            if training_type in ["spaziergang", "walking_jogging", "radfahren"] and distance_km > 0:
-                distance_bonus = int(distance_km * 50)  # 50 kcal per km
-                kcal += distance_bonus
+        # Calculate base kcal
+        kcal = int(base_kcal_per_min * duration_minutes * intensity_factor)
+        # Add distance bonus for certain activities
+        if training_type in ["spaziergang", "walking_jogging", "radfahren"] and distance_km > 0:
+            distance_bonus = int(distance_km * 50)  # 50 kcal per km
+            kcal += distance_bonus
         return kcal
     
     def add_training_session(self, date: str, training_type: str, 
@@ -166,10 +137,8 @@ class TrainingProgressProjector:
         return daily_calories
     
     def calculate_weight_projection(self, daily_calories: List[Tuple[datetime, float]], 
-                                  target_calories: int = None, real_weights: List[Tuple[datetime, float]] = None) -> List[Tuple[datetime, float]]:
+                                  target_calories: int = 2400, real_weights: List[Tuple[datetime, float]] = None) -> List[Tuple[datetime, float]]:
         """Calculate weight projection based on calorie deficit and fit to real weights if available"""
-        if target_calories is None:
-            target_calories = self.bmr
         weight_projection = []
         current_weight = self.initial_weight
         dates = [date for date, _ in daily_calories]
@@ -227,10 +196,10 @@ class TrainingProgressProjector:
         interval_sessions = [s for s in self.training_sessions if s.training_type == "crosstrainer_intervall"]
         walking_sessions = [s for s in self.training_sessions if s.training_type == "spaziergang"]
         
-        # Moving averages (use all available data, not just last 7 sessions)
-        stepper_ma = np.mean([s.kcal for s in stepper_sessions]) if stepper_sessions else 134
-        interval_ma = np.mean([s.kcal for s in interval_sessions]) if interval_sessions else 343
-        walking_ma = np.mean([s.kcal for s in walking_sessions]) if walking_sessions else 448
+        # Moving averages (window=3 for small data, else 7)
+        stepper_ma = self._moving_average([s.kcal for s in stepper_sessions], window=min(7, len(stepper_sessions))) if stepper_sessions else 134
+        interval_ma = self._moving_average([s.kcal for s in interval_sessions], window=min(7, len(interval_sessions))) if interval_sessions else 343
+        walking_ma = self._moving_average([s.kcal for s in walking_sessions], window=min(7, len(walking_sessions))) if walking_sessions else 448
         
         # Linear regression slopes
         stepper_slope = self._linear_regression_slope([s.kcal for s in stepper_sessions]) if stepper_sessions else 0
@@ -269,34 +238,19 @@ class TrainingProgressProjector:
                 total_calories = self.bmr + kcal + (self.epoc_factor * kcal)
             else:
                 total_calories = self.bmr
-            # Ensure total_calories is never below BMR
-            total_calories = max(total_calories, self.bmr)
             prognosis_calories.append((current_date, total_calories))
             current_date += timedelta(days=1)
         
         # Combine real and prognosis data
         all_calories = real_calories + prognosis_calories
         
+        # Calculate weight projection
+        weight_projection = self.calculate_weight_projection(all_calories)
+        
         # Calculate moving average
         calories_values = [cal for _, cal in all_calories]
         moving_avg = np.convolve(calories_values, np.ones(7)/7, mode='valid')
         
-        # Use moving average for weight projection with correct dates
-        if len(all_calories) >= 7 and len(moving_avg) > 0:
-            ma_dates = [date for date, _ in all_calories][6:6+len(moving_avg)]
-            weight_projection = []
-            current_weight = self.initial_weight
-            for date, cal in zip(ma_dates, moving_avg):
-                if date is not None:  # Ensure date is not None
-                    deficit = cal - self.bmr
-                    weight_loss = max(deficit, 0) / 7700
-                    weight_loss_factor = 1 - (self.metabolic_adaptation * (self.initial_weight - current_weight) / self.initial_weight)
-                    weight_loss *= weight_loss_factor
-                    current_weight -= weight_loss
-                    weight_projection.append((date, current_weight))
-        else:
-            weight_projection = []
-
         prognosis_data = {
             "start_date": start_date,
             "end_date": end_date,
@@ -499,10 +453,10 @@ BEWERTUNG:
             serializable_prognosis['generated_date'] = prognosis['generated_date'].isoformat()
             
             # Convert datetime tuples to lists
-            serializable_prognosis['real_calories'] = [(d.isoformat(), c) for d, c in prognosis['real_calories'] if d is not None]
-            serializable_prognosis['prognosis_calories'] = [(d.isoformat(), c) for d, c in prognosis['prognosis_calories'] if d is not None]
-            serializable_prognosis['all_calories'] = [(d.isoformat(), c) for d, c in prognosis['all_calories'] if d is not None]
-            serializable_prognosis['weight_projection'] = [(d.isoformat(), w) for d, w in prognosis['weight_projection'] if d is not None]
+            serializable_prognosis['real_calories'] = [(d.isoformat(), c) for d, c in prognosis['real_calories']]
+            serializable_prognosis['prognosis_calories'] = [(d.isoformat(), c) for d, c in prognosis['prognosis_calories']]
+            serializable_prognosis['all_calories'] = [(d.isoformat(), c) for d, c in prognosis['all_calories']]
+            serializable_prognosis['weight_projection'] = [(d.isoformat(), w) for d, w in prognosis['weight_projection']]
             
             # Convert numpy array to list
             if 'moving_average' in prognosis:
@@ -595,7 +549,7 @@ BEWERTUNG:
         p['generated_date'] = p['generated_date'].isoformat() if isinstance(p['generated_date'], datetime) else p['generated_date']
         # Convert lists of tuples with datetimes
         def convert_list(lst):
-            return [(d.isoformat() if isinstance(d, datetime) else d, v) for d, v in lst if d is not None]
+            return [(d.isoformat() if isinstance(d, datetime) else d, v) for d, v in lst]
         p['real_calories'] = convert_list(p['real_calories'])
         p['prognosis_calories'] = convert_list(p['prognosis_calories'])
         p['all_calories'] = convert_list(p['all_calories'])
@@ -618,25 +572,23 @@ BEWERTUNG:
         last_week_file = "prognosis_last_week.json"
         two_weeks_ago_file = "prognosis_two_weeks_ago.json"
         need_update = True
-        last_snapshot_date = None
         if os.path.exists(last_week_file):
             with open(last_week_file, 'r', encoding='utf-8') as f:
                 try:
                     data = json.load(f)
                     file_date = data.get('generated_date')
-                    if file_date:
-                        last_snapshot_date = file_date[:10]
-                        if last_snapshot_date == last_sunday.strftime('%Y-%m-%d'):
-                            need_update = False
+                    if file_date and file_date.startswith(last_sunday.strftime('%Y-%m-%d')):
+                        need_update = False
                 except Exception:
                     pass
         if need_update:
-            # Only rollover if last_week_file exists and is not empty
-            if os.path.exists(last_week_file) and os.path.getsize(last_week_file) > 0:
+            if os.path.exists(last_week_file):
                 copyfile(last_week_file, two_weeks_ago_file)
-            # Generate new prognosis for last week (up to last Sunday)
             prognosis = self.generate_prognosis_for_cutoff(last_sunday)
-            prognosis['generated_date'] = last_sunday.isoformat()
+            if 'generated_date' in prognosis:
+                prognosis['generated_date'] = last_sunday.isoformat()
+            else:
+                prognosis['generated_date'] = last_sunday.isoformat()
             # Serialize all datetimes to strings
             prognosis_serialized = self.serialize_prognosis_for_json(prognosis)
             with open(last_week_file, 'w', encoding='utf-8') as f:
@@ -768,7 +720,7 @@ def interactive_session():
         
         # Distance
         distance_input = get_user_input("Wie viel Strecke hast du zurückgelegt? (km, 0 wenn nicht relevant): ")
-        distance_km = float(distance_input.replace(",", ".")) if distance_input else 0.0
+        distance_km = float(distance_input) if distance_input else 0.0
         
         # Add training session
         session = projector.add_training_session(
@@ -891,22 +843,12 @@ def plot_combined_progress(projector):
     # Echte Tageswerte und reales MA
     if len(projector.training_sessions) > 0:
         start_date = min(s.date for s in projector.training_sessions)
-        from datetime import datetime as dt
-        today = dt.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = today
+        end_date = max(s.date for s in projector.training_sessions)
         days = (end_date - start_date).days + 1
         real_calories = projector.get_daily_calories(start_date, days)
         real_dates = [d for d, _ in real_calories]
         real_values = [v for _, v in real_calories]
-        # Find days with and without training
-        training_dates = set(s.date.date() for s in projector.training_sessions)
-        no_training_dates = [d for d in real_dates if d.date() not in training_dates]
-        training_days = [d for d in real_dates if d.date() in training_dates]
-        training_values = [v for d, v in zip(real_dates, real_values) if d.date() in training_dates]
-        no_training_values = [v for d, v in zip(real_dates, real_values) if d.date() not in training_dates]
-        # Plot training days (orange) and no training days (gray)
-        ax1.scatter(training_days, training_values, color=farbe_punkte, s=60, label='Echte Tageswerte', zorder=5)
-        ax1.scatter(no_training_dates := no_training_dates, no_training_values, color='gray', s=60, label='Kein Training', zorder=4)
+        ax1.scatter(real_dates, real_values, color=farbe_punkte, s=60, label='Echte Tageswerte', zorder=5)
         if len(real_values) >= 7:
             real_ma = np.convolve(real_values, np.ones(7)/7, mode='valid')
             real_ma_dates = real_dates[6:6+len(real_ma)]
@@ -920,13 +862,7 @@ def plot_combined_progress(projector):
         latest_prognosis = projector.prognosis_history[-1]
         dates = [date for date, _ in latest_prognosis["all_calories"]]
         weights = [weight for _, weight in latest_prognosis["weight_projection"]]
-        
-        # Ensure arrays have the same length
-        min_length = min(len(dates), len(weights))
-        if min_length > 0:
-            dates = dates[:min_length]
-            weights = weights[:min_length]
-            ax2.plot(dates, weights, color='blue', linewidth=2, label='Prognostiziertes Gewicht (Kalorienmodell)')
+        ax2.plot(dates, weights, color='blue', linewidth=2, label='Prognostiziertes Gewicht (Kalorienmodell)')
         ax2.axhline(y=projector.initial_weight, color='gray', linestyle=':', alpha=0.7, label=f'Startgewicht ({projector.initial_weight} kg)')
         # Echte Gewichte
         real_weights = load_weight_log()

@@ -27,3 +27,7 @@
 ## [1.2.0] - 2025-07-15
 ### Added
 - Improved calorie calculation for crosstrainer and crosstrainer_intervall: Now takes both duration and distance into account and uses the lower value to avoid overestimation. This makes calorie output more realistic when distance is much lower for the same time/intensity. 
+
+## [1.2.1] - 2025-07-16
+### Fixed
+- Daily calorie calculation now sums all training sessions per day (instead of only the first), so multiple activities on the same day are correctly included in the total burn. 
